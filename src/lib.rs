@@ -1,32 +1,53 @@
 
 
-struct Rule {
-    alternatives: Box<[Alternative]>,
+pub struct Rule {
+    pub alternatives: Box<[Alternative]>,
 }
 
 
-struct Alternative {
+pub struct Alternative {
     terms: Box<[Term]>,
+    indices: Box<[usize]>,
 }
 
-enum Term {
+impl Alternative {
+    pub fn new(terms: Box<[Term]>) -> Self {
+        let mut indices = Vec::with_capacity(terms.len() + 1);
+
+        for (index, term) in terms.iter().enumerate() {
+            if let &Term::Rule{..} = term {
+                indices.push(index);
+            }
+        }
+
+        Alternative {
+            terms: terms,
+            indices: indices.into_boxed_slice(),
+        }
+    }
+}
+
+
+pub enum Term {
     Terminal { value: Box<str> },
     Rule { key: RuleKey },
 }
 
-struct PatternMatcher {
-    rule: &Rule,
-    input: &str,
+pub struct PatternMatcher<'r, 's> {
+    rules: &'r Rules,
+    rule: &'r Rule,
+    input: &'s str,
     variant: usize,
-    children: Vec<PatternMatcher>,
+    children: Vec<PatternMatcher<'r, 's>>,
 }
 
-impl PatternMatcher {
-    fn new(rule: &Rule, input: &str) -> Self {
+impl<'r, 's> PatternMatcher<'r, 's> {
+    pub fn new(rules: &'r Rules, rule: RuleKey, input: &'s str) -> Self {
         PatternMatcher {
-            rule: rule,
+            rules: rules,
+            rule: &rules[rule],
             input: input,
-            variant: ~0,
+            variant: usize::max_value(),
             children: Vec::new(),
         }
     }
@@ -36,25 +57,59 @@ impl PatternMatcher {
     }
 
     fn needs_rewind(&self) -> bool {
-        !self.children.is_empty() && self.children.last().is_unfinished()
+        self.children
+            .last()
+            .map(|child| !child.is_unfinished()) // do need to unwind if child ran out of possibilities
+            .unwrap_or(false) // don't need to unwind if there are no children
     }
 
-    fn next_child(&self) -> Result<(RuleKey, &str), bool> {
-        let mut leftover = self.children.last().leftover();
-        let mut curr_term = self.curr_term();
-        let terms = self.rule.alternatives[self.variant].terms;
-        let (_, terms_left) = terms.split(curr_term);
-        for term in terms_left {
+    fn alternative(&self) -> &Alternative {
+        &self.rule.alternatives[self.variant]
+    }
+
+    fn curr_term(&self) -> usize {
+        if self.children.is_empty() {
+            0
+        } else {
+            self.alternative()
+                .indices[self.children.len()]
+        }
+    }
+
+    fn terms_left(&self) -> &[Term] {
+        self.alternative()
+            .terms
+            .split_at(self.curr_term())
+            .1
+    }
+
+    fn leftover(&self) -> &'s str {
+        let mut result = self.input;
+        for term in self.terms_left() {
+            if let &Term::Terminal { ref value } = term {
+                result = {result}.split_at(value.len()).1;
+            }
+        }
+        result
+    }
+
+    fn next_child(&self) -> Result<(RuleKey, &'s str), bool> {
+        let mut leftover = if let Some(child) = self.children.last() {
+            child.leftover()
+        } else {
+            self.input
+        };
+        for term in self.terms_left() {
             match term {
-                Terminal { ref value } => {
-                    if leftover.starts_with(value) {
-                        (_, leftover) = {leftover}.split_at(value.len());
-                        curr_term += 1;
+                &Term::Terminal { value: ref expected } => {
+                    let (actual, new_leftover) = {leftover}.split_at(expected.len());
+                    if **expected == *actual {
+                        leftover = new_leftover;
                     } else {
                         return Err(false);
                     }
                 },
-                Rule { key } => {
+                &Term::Rule { key } => {
                     return Ok((key, leftover));
                 },
             }
@@ -62,18 +117,21 @@ impl PatternMatcher {
         Err(true)
     }
 
-    fn find_next(&mut self) {
-        self.children.last_mut().find_next();
-        while self.variant < self.rule.variants.len() {
+    pub fn find_next(&mut self) {
+        if let Some(child) = self.children.last_mut() {
+            child.find_next()
+        } else {
+            self.variant += 1;
+        }
+        while self.variant < self.rule.alternatives.len() {
             if self.needs_rewind() {
                 self.children.pop();
-                self.children.last_mut().find_next();
+                self.children.last_mut().unwrap().find_next();
             } else if !self.children.is_empty() {
                 match self.next_child() {
                     // terminals matched, nonterminal found
-                    Ok(key, leftover) => {
-                        let sub_rule = &rules[key];
-                        let next_match = PatternMatcher::new(sub_rule, leftover);
+                    Ok((key, leftover)) => {
+                        let next_match = PatternMatcher::new(self.rules, key, leftover);
                         self.children.push(next_match);
                     },
                     // terminals matched, rule satisfied
@@ -82,7 +140,7 @@ impl PatternMatcher {
                     },
                     // terminals not matched
                     Err(false) => {
-                        self.children.last_mut().find_next();
+                        self.children.last_mut().unwrap().find_next();
                     },
                 }
             } else {
@@ -90,43 +148,58 @@ impl PatternMatcher {
             }
         }
     }
-}
 
+    pub fn pattern(&self) -> Vec<usize> {
+        let mut result = Vec::new();
+        self.pattern_with(&mut result);
+        result
+    }
 
-
-type RuleKey = i32;
-
-
-fn terminal(input: &str) -> Term {
-    let owned = String::from(input);
-    Term::Terminal {
-        value: owned.as_boxed_str(),
+    pub fn pattern_with(&self, patt: &mut Vec<usize>) {
+        patt.push(self.variant);
+        for child in &*self.children {
+            child.pattern_with(patt);
+        }
     }
 }
 
-fn terminal_alternative(input: &str) -> Alternative {
-    Alternative{
-        terms: Box::<[Term; 1]>::new(terminal(input)),
-    }
-}
+
+
+type RuleKey = usize;
+type Rules = Vec<Rule>;
+
+
 
 #[cfg(test)]
 mod tests {
+
+    use super::*;
+
     const FUNPAR: RuleKey = 0;
     const FUNID: RuleKey = 1;
     const PARID: RuleKey = 2;
 
+    fn terminal<'a>(input: &'a str) -> Term {
+        let owned = String::from(input);
+        Term::Terminal {
+            value: owned.into_boxed_str(),
+        }
+    }
+
+    fn terminal_alternative<'a>(input: &'a str) -> Alternative {
+        let term: Box<[Term; 1]> = Box::new([terminal(input)]);
+        Alternative::new(term)
+    }
+
     fn make_rules() -> Rules {
-        let funpar = Alternative {
-            terms: Box::<[Term; 6]>::new([
-                Term::Rule { key: FUNID },
-                terminal("("),
-                Term::Rule { key: PARID },
-                terminal(", "),
-                Term::Rule { key: PARID },
-                terminal(")"),
-            ]),
-        };
+        let funpar = Alternative::new(vec![
+            Term::Rule { key: FUNID },
+            terminal("("),
+            Term::Rule { key: PARID },
+            terminal(", "),
+            Term::Rule { key: PARID },
+            terminal(")"),
+        ].into_boxed_slice());
         let funpar = Rule {
             alternatives: Box::<[Alternative; 1]>::new([funpar]),
         };
@@ -150,6 +223,6 @@ mod tests {
         let rules = make_rules();
         let mut matcher = PatternMatcher::new(&rules, FUNPAR, input);
         matcher.find_next();
-        assert_eq!(matcher.pattern(), pattern(vec![0,0,1]));
+        assert_eq!(matcher.pattern(), vec![0,0,1]);
     }
 }
