@@ -94,21 +94,62 @@ impl PatternMatcher {
 
 
 
-
-fn match<'r, 's, Rs: Index<RuleKey, Output=Rule>>(
-    rules: &'r Rs,
-    rule: RuleKey,
-    input: &'s str)
-{
-    let rule = &rules[rule];
-    for option in rule.alternatives.iter() {
-        for
+type RuleKey = i32;
 
 
+fn terminal(input: &str) -> Term {
+    let owned = String::from(input);
+    Term::Terminal {
+        value: owned.as_boxed_str(),
+    }
+}
+
+fn terminal_alternative(input: &str) -> Alternative {
+    Alternative{
+        terms: Box::<[Term; 1]>::new(terminal(input)),
+    }
+}
 
 #[cfg(test)]
 mod tests {
+    const FUNPAR: RuleKey = 0;
+    const FUNID: RuleKey = 1;
+    const PARID: RuleKey = 2;
+
+    fn make_rules() -> Rules {
+        let funpar = Alternative {
+            terms: Box::<[Term; 6]>::new([
+                Term::Rule { key: FUNID },
+                terminal("("),
+                Term::Rule { key: PARID },
+                terminal(", "),
+                Term::Rule { key: PARID },
+                terminal(")"),
+            ]),
+        };
+        let funpar = Rule {
+            alternatives: Box::<[Alternative; 1]>::new([funpar]),
+        };
+
+        let funid = [terminal_alternative("f"), terminal_alternative("g")];
+        let funid = Rule {
+            alternatives: Box::<[Alternative; 2]>::new(funid),
+        };
+
+        let parid = [terminal_alternative("x"), terminal_alternative("y")];
+        let parid = Rule {
+            alternatives: Box::<[Alternative; 2]>::new(parid),
+        };
+
+        vec![funpar, funid, parid]
+    }
+
     #[test]
     fn it_works() {
+        let input = "f(x, y)";
+        let rules = make_rules();
+        let mut matcher = PatternMatcher::new(&rules, FUNPAR, input);
+        matcher.find_next();
+        assert_eq!(matcher.pattern(), pattern(vec![0,0,1]));
     }
 }
