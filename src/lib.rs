@@ -14,70 +14,81 @@ enum Term {
     Rule { key: RuleKey },
 }
 
-struct Pattern {
-    variant: usize,
-    content: Box<[Pattern]>,
-}
-
 struct PatternMatcher {
     rule: &Rule,
     input: &str,
     variant: usize,
-    children: Box<[PatternMatcher]>,
+    children: Vec<PatternMatcher>,
 }
 
 impl PatternMatcher {
     fn new(rule: &Rule, input: &str) -> Self {
-        let mut result = PatternMatcher {
+        PatternMatcher {
             rule: rule,
             input: input,
-            variant: 0,
-            children: Box::<[_; 0]>::new([]),
-        };
-        let sub_matches = Vec::new();
+            variant: ~0,
+            children: Vec::new(),
+        }
+    }
 
-        while result.variant < rule.alternatives.len() {
-        {
-            let alternative = &rule.alternatives[result.variant];
-            sub_matches.empty();
-            let mut leftover = input;
-            let mut curr_term = 0;
-            while curr_term < alternative.terms.len() {
-                match alternative.terms[curr_term] {
-                    Terminal { ref value } => {
-                        while !leftover.starts_with(value) {
-                            sub_matches.last_mut().next();
-                            // break if iterating the last sub_match failed
-                            leftover = sub_matches.last().leftover;
-                        }
+    fn is_unfinished(&self) -> bool {
+        self.variant + 1 <= self.rule.alternatives.len()
+    }
+
+    fn needs_rewind(&self) -> bool {
+        !self.children.is_empty() && self.children.last().is_unfinished()
+    }
+
+    fn next_child(&self) -> Result<(RuleKey, &str), bool> {
+        let mut leftover = self.children.last().leftover();
+        let mut curr_term = self.curr_term();
+        let terms = self.rule.alternatives[self.variant].terms;
+        let (_, terms_left) = terms.split(curr_term);
+        for term in terms_left {
+            match term {
+                Terminal { ref value } => {
+                    if leftover.starts_with(value) {
                         (_, leftover) = {leftover}.split_at(value.len());
-                    },
-                    Rule { key } => {
+                        curr_term += 1;
+                    } else {
+                        return Err(false);
+                    }
+                },
+                Rule { key } => {
+                    return Ok((key, leftover));
+                },
+            }
+        }
+        Err(true)
+    }
+
+    fn find_next(&mut self) {
+        self.children.last_mut().find_next();
+        while self.variant < self.rule.variants.len() {
+            if self.needs_rewind() {
+                self.children.pop();
+                self.children.last_mut().find_next();
+            } else if !self.children.is_empty() {
+                match self.next_child() {
+                    // terminals matched, nonterminal found
+                    Ok(key, leftover) => {
                         let sub_rule = &rules[key];
                         let next_match = PatternMatcher::new(sub_rule, leftover);
-                        sub_matches.push(next_match);
+                        self.children.push(next_match);
+                    },
+                    // terminals matched, rule satisfied
+                    Err(true) => {
+                        break;
+                    },
+                    // terminals not matched
+                    Err(false) => {
+                        self.children.last_mut().find_next();
                     },
                 }
-                curr_term += 1; // but what if matching a terminal fails?
-                while !sub_matches.is_empty() && !sub_matches.last().failed() {
-                    sub_matches.pop();
-                    term -= 1;
-                    while let Terminal{..} = alternative.terms[curr_term] {
-                        term -= 1;
-                    }
-                    sub_matches.last_mut().next();
-                }
-                if curr_term == 0 {
-                    break;
-                }
+            } else {
+                self.variant += 1;
             }
-            if curr_term == alternative.terms.len() {
-                result.children = sub_matches.into_boxed_slice();
-                return result;
-            }
-            result.variant += 1;
         }
-        result
     }
 }
 
