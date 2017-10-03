@@ -1,5 +1,3 @@
-
-
 pub struct Rule {
     pub alternatives: Box<[Alternative]>,
 }
@@ -53,7 +51,7 @@ impl<'r, 's> PatternMatcher<'r, 's> {
     }
 
     fn is_unfinished(&self) -> bool {
-        self.variant + 1 <= self.rule.alternatives.len()
+        self.variant.wrapping_add(1) <= self.rule.alternatives.len()
     }
 
     fn needs_rewind(&self) -> bool {
@@ -117,21 +115,28 @@ impl<'r, 's> PatternMatcher<'r, 's> {
         Err(true)
     }
 
-    pub fn find_next(&mut self) {
+    // call a non-naive find next on the last child if any,
+    // if there is no child move on to the next variant instead
+    fn find_next_naive(&mut self) {
         if let Some(child) = self.children.last_mut() {
             child.find_next()
         } else {
-            self.variant += 1;
+            self.variant = self.variant.wrapping_add(1);
         }
-        while self.variant < self.rule.alternatives.len() {
+    }
+
+    pub fn find_next(&mut self) {
+        self.find_next_naive();
+        while self.is_unfinished() {
             if self.needs_rewind() {
                 self.children.pop();
-                self.children.last_mut().unwrap().find_next();
-            } else if !self.children.is_empty() {
+                self.find_next_naive();
+            } else {
                 match self.next_child() {
                     // terminals matched, nonterminal found
                     Ok((key, leftover)) => {
-                        let next_match = PatternMatcher::new(self.rules, key, leftover);
+                        let mut next_match = PatternMatcher::new(self.rules, key, leftover);
+                        next_match.find_next();
                         self.children.push(next_match);
                     },
                     // terminals matched, rule satisfied
@@ -140,11 +145,9 @@ impl<'r, 's> PatternMatcher<'r, 's> {
                     },
                     // terminals not matched
                     Err(false) => {
-                        self.children.last_mut().unwrap().find_next();
+                        self.find_next_naive();
                     },
                 }
-            } else {
-                self.variant += 1;
             }
         }
     }
@@ -222,6 +225,7 @@ mod tests {
         let input = "f(x, y)";
         let rules = make_rules();
         let mut matcher = PatternMatcher::new(&rules, FUNPAR, input);
+        assert_eq!(matcher.pattern(), vec![usize::max_value()]);
         matcher.find_next();
         assert_eq!(matcher.pattern(), vec![0,0,1]);
     }
