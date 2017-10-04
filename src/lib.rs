@@ -31,6 +31,13 @@ pub enum Term {
     Rule { key: RuleKey },
 }
 
+enum MatcherState<'s> {
+    Valid,
+    Rewind,
+    IterateLast,
+    AppendMatcher(RuleKey, &'s str),
+}
+
 pub struct PatternMatcher<'r, 's> {
     rules: &'r Rules,
     rule: &'r Rule,
@@ -91,7 +98,10 @@ impl<'r, 's> PatternMatcher<'r, 's> {
         result
     }
 
-    fn next_child(&self) -> Result<(RuleKey, &'s str), bool> {
+    fn iteration_state(&self) -> MatcherState<'s> {
+        if self.needs_rewind() {
+            return MatcherState::Rewind;
+        }
         let mut leftover = if let Some(child) = self.children.last() {
             child.leftover()
         } else {
@@ -104,15 +114,15 @@ impl<'r, 's> PatternMatcher<'r, 's> {
                     if **expected == *actual {
                         leftover = new_leftover;
                     } else {
-                        return Err(false);
+                        return MatcherState::IterateLast;
                     }
                 },
                 &Term::Rule { key } => {
-                    return Ok((key, leftover));
+                    return MatcherState::AppendMatcher(key, leftover);
                 },
             }
         }
-        Err(true)
+        MatcherState::Valid
     }
 
     // call a non-naive find next on the last child if any,
@@ -128,26 +138,25 @@ impl<'r, 's> PatternMatcher<'r, 's> {
     pub fn find_next(&mut self) {
         self.find_next_naive();
         while self.is_unfinished() {
-            if self.needs_rewind() {
-                self.children.pop();
-                self.find_next_naive();
-            } else {
-                match self.next_child() {
-                    // terminals matched, nonterminal found
-                    Ok((key, leftover)) => {
-                        let mut next_match = PatternMatcher::new(self.rules, key, leftover);
-                        next_match.find_next();
-                        self.children.push(next_match);
-                    },
-                    // terminals matched, rule satisfied
-                    Err(true) => {
-                        break;
-                    },
-                    // terminals not matched
-                    Err(false) => {
-                        self.find_next_naive();
-                    },
-                }
+            match self.iteration_state() {
+                MatcherState::Rewind => {
+                    self.children.pop();
+                    self.find_next_naive();
+                },
+                // terminals matched, nonterminal found
+                MatcherState::AppendMatcher(key, leftover) => {
+                    let mut next_match = PatternMatcher::new(self.rules, key, leftover);
+                    next_match.find_next();
+                    self.children.push(next_match);
+                },
+                // terminals matched, rule satisfied
+                MatcherState::Valid => {
+                    break;
+                },
+                // terminals not matched
+                MatcherState::IterateLast => {
+                    self.find_next_naive();
+                },
             }
         }
     }
