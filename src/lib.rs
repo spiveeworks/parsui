@@ -77,7 +77,7 @@ impl<'r, 's> PatternMatcher<'r, 's> {
             0
         } else {
             self.alternative()
-                .indices[self.children.len()]
+                .indices[self.children.len() - 1] + 1
         }
     }
 
@@ -168,7 +168,9 @@ impl<'r, 's> PatternMatcher<'r, 's> {
     }
 
     pub fn pattern_with(&self, patt: &mut Vec<usize>) {
-        patt.push(self.variant);
+        if self.variant != 0 || self.rule.alternatives.len() > 1 {
+            patt.push(self.variant);
+        }
         for child in &*self.children {
             child.pattern_with(patt);
         }
