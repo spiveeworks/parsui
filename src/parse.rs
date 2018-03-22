@@ -46,12 +46,6 @@ pub struct PatternMatcher<'r, 's> {
     children: Vec<PatternMatcher<'r, 's>>,
 }
 
-#[derive(Clone)]
-pub struct Pattern {
-    pub variant: usize,
-    pub children: Box<[Rc<Pattern>]>,
-}
-
 impl<'r, 's> PatternMatcher<'r, 's> {
     pub fn new(rules: &'r Rules, rule: RuleKey, input: &'s str) -> Self {
         PatternMatcher {
@@ -167,17 +161,10 @@ impl<'r, 's> PatternMatcher<'r, 's> {
         }
     }
 
-    pub fn pattern(&self) -> Pattern
-        let children: Vec<Rc<Pattern>> =
-            self.children
-                .iter()
-                .map(|child| Rc::new(child.pattern()))
-                .collect();
-        PatternInt{
-            variant: self.variant,
-            children: children.into_boxed_slice(),
-        }
-
+    pub fn pattern(&self) -> Vec<usize> {
+        let mut result = Vec::new();
+        self.pattern_with(&mut result);
+        result
     }
 
     pub fn pattern_with(&self, patt: &mut Vec<usize>) {
